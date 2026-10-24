@@ -131,6 +131,28 @@ class Lock:
         os.close(self.fd)
 
 
+def daemon_running(folder):
+    try:
+        handle = open(os.path.join(folder, "daemon.lock"), "a+")
+    except OSError:
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        handle.close()
+
+
 def start_daemon(folder):
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presence.py")
     python = sys.executable
@@ -154,6 +176,9 @@ def update(record, payload, event):
     if event == "SubagentStop" and agent:
         record["agents"] = [a for a in record.get("agents", []) if a != agent]
         return False
+    if agent and "state" not in record:
+        record.update(state="working", action="agents", t=START)
+        return True
     if agent or START < record.get("t", 0):
         return False
     if event == "SessionStart":
@@ -223,8 +248,9 @@ def main():
         update(record, payload, event)
         record.setdefault("t", START)
         write_json(path, record)
-    if event in ("SessionStart", "UserPromptSubmit"):
+    if event in ("SessionStart", "UserPromptSubmit") or not os.path.exists(os.path.join(folder, "options.json")):
         save_options(folder)
+    if not daemon_running(folder):
         start_daemon(folder)
 
 
