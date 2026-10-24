@@ -176,6 +176,7 @@ def update(record, payload, event):
         seen = {k: v for k, v in seen.items() if START - v < AGENT_SECONDS} if isinstance(seen, dict) else {}
         if event == "SubagentStop":
             seen.pop(agent, None)
+            record["ended"] = (record.get("ended", []) + [agent])[-50:]
         else:
             seen[agent] = START
         record["agents"] = seen

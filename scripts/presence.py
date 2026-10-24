@@ -18,6 +18,7 @@ ORPHAN_SECONDS = 30 * 60
 EXIT_AFTER_SECONDS = 10 * 60
 SUMMARY_TIMEOUT = 90
 AGENT_SECONDS = 5 * 60
+FILE_AGENT_SECONDS = 90
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 LABELS = {
@@ -194,11 +195,30 @@ def image_for(action):
     return IMAGE_URL.format("working-typing")
 
 
+def agents_folder(record):
+    transcript = transcript_of(record)
+    return os.path.join(os.path.splitext(transcript)[0], "subagents") if transcript else None
+
+
 def active_agents(record, now):
-    agents = record.get("agents") or {}
-    if isinstance(agents, dict):
-        return sum(1 for seen in agents.values() if now - seen < AGENT_SECONDS)
-    return len(agents)
+    if "_agents" in record:
+        return record["_agents"]
+    seen = record.get("agents") or {}
+    running = {a for a, t in seen.items() if now - t < AGENT_SECONDS} if isinstance(seen, dict) else set(seen)
+    folder = agents_folder(record)
+    try:
+        names = os.listdir(folder) if folder else []
+    except OSError:
+        names = []
+    for name in names:
+        if name.startswith("agent-") and name.endswith(".jsonl"):
+            try:
+                if now - os.path.getmtime(os.path.join(folder, name)) < FILE_AGENT_SECONDS:
+                    running.add(name[6:-6])
+            except OSError:
+                pass
+    record["_agents"] = len(running - set(record.get("ended") or []))
+    return record["_agents"]
 
 
 def action_of(record, now):
@@ -270,7 +290,7 @@ def session_tokens(record):
     if not transcript:
         return 0
     total = file_tokens(transcript)
-    agents = os.path.join(os.path.splitext(transcript)[0], "subagents")
+    agents = agents_folder(record)
     try:
         names = os.listdir(agents)
     except OSError:
