@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "clawd-presence",
+  "displayName": "Clawd Presence",
+  "version": "1.0.0",
+  "description": "Shows your Claude Code sessions as a Discord activity, with an animated Clawd and a short summary of what you are working on.",
+  "author": { "name": "Louiscvo", "url": "https://github.com/Louiscvo" },
+  "homepage": "https://github.com/Louiscvo/clawd-presence#readme",
+  "repository": "https://github.com/Louiscvo/clawd-presence",
+  "license": "MIT",
+  "keywords": ["discord", "rich-presence", "activity", "clawd", "hooks"],
+  "userConfig": {
+    "summary": {
+      "type": "boolean",
+      "title": "Work summary / Résumé du travail",
+      "description": "Show a short summary of your last two messages (made with Claude Haiku, uses a little of your plan). Visible to everyone who sees your Discord profile.",
+      "default": true
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Langue",
+      "description": "auto, fr or en",
+      "default": "auto"
+    },
+    "client_id": {
+      "type": "string",
+      "title": "Discord application ID",
+      "description": "Leave as is, or put the ID of your own Discord application to change the name shown after \"Playing\".",
+      "default": "1506443909406920948"
+    }
+  }
+}
