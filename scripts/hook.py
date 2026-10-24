@@ -8,6 +8,7 @@ import time
 
 START = time.time()
 DEFAULT_CLIENT_ID = "1506443909406920948"
+AGENT_SECONDS = 5 * 60
 WAITING_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 TOOL_ACTIONS = {
     "Edit": "code", "MultiEdit": "code", "Write": "code", "NotebookEdit": "code",
@@ -170,16 +171,19 @@ def start_daemon(folder):
 def update(record, payload, event):
     agent = payload.get("agent_id")
     tool = payload.get("tool_name") or ""
-    if event == "SubagentStart" and agent:
-        record["agents"] = sorted(set(record.get("agents", [])) | {agent})
+    if agent:
+        seen = record.get("agents")
+        seen = {k: v for k, v in seen.items() if START - v < AGENT_SECONDS} if isinstance(seen, dict) else {}
+        if event == "SubagentStop":
+            seen.pop(agent, None)
+        else:
+            seen[agent] = START
+        record["agents"] = seen
+        if "state" not in record:
+            record.update(state="working", action="agents", t=START)
+            return True
         return False
-    if event == "SubagentStop" and agent:
-        record["agents"] = [a for a in record.get("agents", []) if a != agent]
-        return False
-    if agent and "state" not in record:
-        record.update(state="working", action="agents", t=START)
-        return True
-    if agent or START < record.get("t", 0):
+    if START < record.get("t", 0):
         return False
     if event == "SessionStart":
         if payload.get("source") == "compact":
@@ -209,9 +213,9 @@ def update(record, payload, event):
         else:
             return False
     elif event == "Stop":
-        record.update(state="done", action="done", agents=[])
+        record.update(state="done", action="done")
     elif event == "StopFailure":
-        record.update(state="error", action="error", agents=[])
+        record.update(state="error", action="error")
     else:
         return False
     record["t"] = START

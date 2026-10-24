@@ -16,6 +16,7 @@ IDLE_SECONDS = 15 * 60
 ORPHAN_SECONDS = 30 * 60
 EXIT_AFTER_SECONDS = 10 * 60
 SUMMARY_TIMEOUT = 90
+AGENT_SECONDS = 5 * 60
 
 LABELS = {
     "fr": {
@@ -25,7 +26,7 @@ LABELS = {
         "tools": "Utilise un outil", "working": "Travaille", "permission": "Attend une permission",
         "question": "Attend une réponse", "done": "A fini, attend la suite", "error": "Bloqué sur une erreur",
         "ready": "Session ouverte", "idle": "En pause",
-        "sessions": "{} sessions", "helper": "{} assistant", "helpers": "{} assistants",
+        "sessions": "{} sessions : {}", "helper": "{} assistant", "helpers": "{} assistants",
     },
     "en": {
         "thinking": "Thinking", "code": "Writing code", "commands": "Running commands",
@@ -34,7 +35,7 @@ LABELS = {
         "tools": "Using a tool", "working": "Working", "permission": "Waiting for permission",
         "question": "Waiting for an answer", "done": "Done, waiting for more", "error": "Stopped on an error",
         "ready": "Session open", "idle": "Idle",
-        "sessions": "{} sessions", "helper": "{} helper", "helpers": "{} helpers",
+        "sessions": "{} sessions: {}", "helper": "{} helper", "helpers": "{} helpers",
     },
 }
 SUMMARY_PROMPTS = {
@@ -55,6 +56,7 @@ PRIORITY = {"waiting": 3, "working": 2, "error": 1, "done": 1, "ready": 0}
 summaries = {}
 pending = {}
 checked_pids = {}
+launch_times = {}
 
 
 def default_data_dir():
@@ -85,6 +87,17 @@ def is_claude(pid):
     return checked_pids[pid]
 
 
+def launch_time(pid):
+    if pid not in launch_times:
+        try:
+            out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=2,
+                                 env=dict(os.environ, LC_ALL="C")).stdout.strip()
+            launch_times[pid] = time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            launch_times[pid] = None
+    return launch_times[pid]
+
+
 def live_sessions(folder, now):
     sessions = []
     directory = os.path.join(folder, "sessions")
@@ -102,6 +115,7 @@ def live_sessions(folder, now):
         pid = record.get("pid")
         if isinstance(pid, int) and pid > 1 and os.name != "nt":
             alive = is_claude(pid)
+            record["started"] = launch_time(pid) or record.get("started")
         else:
             alive = now - record.get("t", 0) < ORPHAN_SECONDS
         if alive:
@@ -176,6 +190,25 @@ def image_for(action):
     return IMAGE_URL.format("working-typing")
 
 
+def active_agents(record, now):
+    agents = record.get("agents") or {}
+    if isinstance(agents, dict):
+        return sum(1 for seen in agents.values() if now - seen < AGENT_SECONDS)
+    return len(agents)
+
+
+def action_of(record, now):
+    if record.get("state") in ("done", "ready") and active_agents(record, now):
+        return "agents"
+    if record.get("state") in ("done", "ready") and now - record.get("t", 0) > IDLE_SECONDS:
+        return "idle"
+    return record.get("action") or "working"
+
+
+def shorten(text, limit=128):
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def build_activity(folder, options):
     now = time.time()
     sessions = live_sessions(folder, now)
@@ -186,29 +219,32 @@ def build_activity(folder, options):
         return None, 0
     language = options.get("language") if options.get("language") in LABELS else "en"
     labels = LABELS[language]
-    record = max(sessions, key=lambda r: (PRIORITY.get(r.get("state"), 0), r.get("t") or 0))
-    action = record.get("action") or "working"
-    if record.get("state") in ("done", "ready") and now - record.get("t", 0) > IDLE_SECONDS:
-        action = "idle"
-    summary = None
+    ordered = sorted(sessions, key=lambda r: (PRIORITY.get(r.get("state"), 0), r.get("t") or 0), reverse=True)
+    actions = [action_of(r, now) for r in ordered]
+    record = ordered[0]
+    texts = {}
     if options.get("summary", True):
         collect_summaries()
-        request_summary(record, language)
-        summary = summaries.get(record.get("id"), (None, None))[1]
-    parts = [labels.get(action, labels["working"])]
-    if len(sessions) > 1:
-        parts.append(labels["sessions"].format(len(sessions)))
-    helpers = len(record.get("agents") or [])
+        for r in ordered:
+            request_summary(r, language)
+            texts[r.get("id")] = summaries.get(r.get("id"), (None, None))[1]
+    summary = texts.get(record.get("id"))
+    names = [labels.get(a, labels["working"]) for a in actions]
+    parts = []
+    if len(ordered) > 1:
+        parts.append(labels["sessions"].format(len(ordered), ", ".join(names)))
+    elif summary:
+        parts.append(names[0])
+    helpers = sum(active_agents(r, now) for r in ordered)
     if helpers:
         parts.append(labels["helpers" if helpers > 1 else "helper"].format(helpers))
-    activity = {"assets": {"large_image": image_for(action), "large_text": "Claude Code"}}
-    if summary:
-        activity["details"] = summary[:128]
-        activity["state"] = " · ".join(parts)[:128]
-    else:
-        activity["details"] = parts[0]
-        if len(parts) > 1:
-            activity["state"] = " · ".join(parts[1:])
+    hover = " · ".join(t for t in (texts.get(r.get("id")) for r in ordered) if t)
+    activity = {
+        "details": (summary or names[0])[:128],
+        "assets": {"large_image": image_for(actions[0]), "large_text": shorten(hover or "Claude Code")},
+    }
+    if parts:
+        activity["state"] = shorten(" · ".join(parts))
     started = min(r.get("started") or r.get("t") or now for r in sessions)
     activity["timestamps"] = {"start": int(started)}
     return activity, len(sessions)

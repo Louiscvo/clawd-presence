@@ -1,106 +1,116 @@
 # Clawd Presence
 
-Affiche tes sessions Claude Code dans ton activité Discord, avec Clawd (la mascotte de Claude Code) animé selon ce que fait Claude, et un petit résumé de ce sur quoi tu travailles.
+Show your Claude Code sessions in your Discord activity: an animated Clawd (the Claude Code mascot) that follows what Claude is doing, a short summary of what you are working on, and what every open session is up to.
 
-![Clawd selon l'état](images/preview.gif)
+![Clawd states](images/preview.gif)
 
-Sur ton profil Discord, ça donne :
+On your Discord profile it looks like this:
 
 ```
-Joue à Сlaude Code
-Bouton de connexion rouge animé      ← résumé de tes 2 dernières demandes
-Écrit du code · 2 sessions           ← ce que fait Claude en ce moment
-🎮 1:12:05                           ← depuis le lancement de ta première session
+Playing Сlaude Code
+Dark mode for the website                          ← summary of your last 2 messages
+3 sessions: Writing code, Thinking, Idle           ← what each open session is doing
+🎮 3:12:05                                         ← since your first session started
 ```
 
-| Clawd | Quand |
+Hover the image to see the summary of every session.
+
+| Clawd | When |
 | --- | --- |
-| Casque de chantier | Claude écrit du code, lance des commandes ou dirige des assistants |
-| Devant l'ordi | Claude réfléchit, lit le code, cherche sur internet |
-| Bras levés | Claude attend ta réponse ou ta permission, ou il a fini |
-| Endormi | Session ouverte sans rien faire depuis 15 minutes |
+| Hard hat | Claude is writing code, running commands or directing helpers |
+| At the laptop | Claude is thinking, reading code, searching the web |
+| Waving | Claude is waiting for your answer or permission, or it is done |
+| Sleeping | Session open but idle for 15 minutes |
 
-Marche sur **macOS, Windows et Linux**.
+Works on **macOS, Windows and Linux**.
 
-## Ce qu'il faut
+## Requirements
 
-- **Claude Code** à jour.
-- **L'application Discord** ouverte sur le même ordinateur (pas la version navigateur).
-- **Python 3.8 ou plus récent** :
-  - macOS : souvent déjà là. Sinon : `brew install python`, ou l'installateur de [python.org](https://www.python.org/downloads/).
-  - Windows : installateur de [python.org](https://www.python.org/downloads/), en cochant **« Add python.exe to PATH »**. Il faut aussi [Git for Windows](https://git-scm.com/download/win) (Claude Code s'en sert déjà pour lancer les hooks).
-  - Linux : déjà installé presque partout.
-- Dans Discord : **Paramètres → Confidentialité de l'activité → « Partager mon activité »** activé.
+- **Claude Code**, up to date.
+- **The Discord desktop app** running on the same computer (not the browser version).
+- **Python 3.8 or newer**:
+  - macOS: often already there. Otherwise `brew install python`, or the installer from [python.org](https://www.python.org/downloads/).
+  - Windows: installer from [python.org](https://www.python.org/downloads/), with **"Add python.exe to PATH"** ticked. You also need [Git for Windows](https://git-scm.com/download/win) (Claude Code already uses it to run hooks).
+  - Linux: already installed almost everywhere.
+- In Discord: **Settings → Activity Privacy → "Share my activity"** turned on.
 
-## Installation
+## Install
 
-Dans Claude Code, tape :
+In Claude Code, type:
 
 ```
 /plugin marketplace add Louiscvo/clawd-presence
 /plugin install clawd-presence@clawd-presence
 ```
 
-Puis redémarre Claude Code (ou tape `/reload-plugins`). Ton activité apparaît sur Discord dès ta première demande.
+Then restart Claude Code (or type `/reload-plugins` in each open session). Your activity shows up on Discord as soon as Claude does something.
 
-Rien d'autre à faire : pas de programme à lancer au démarrage. Le petit programme qui parle à Discord démarre tout seul avec Claude Code et s'arrête 10 minutes après ta dernière session.
+Nothing else to set up: no program to add to startup. The small program that talks to Discord starts by itself with Claude Code and stops 10 minutes after your last session closes.
 
-## Réglages
+## Settings
 
-Tape `/config` dans Claude Code, partie **Clawd Presence** :
+Type `/config` in Claude Code, **Clawd Presence** section:
 
-| Réglage | Par défaut | Effet |
+| Setting | Default | Effect |
 | --- | --- | --- |
-| Work summary / Résumé du travail | activé | Affiche le résumé de tes 2 dernières demandes |
-| Language / Langue | `auto` | `fr`, `en`, ou `auto` (langue de ton ordinateur) |
-| Discord application ID | celui de « Сlaude Code » | Change le nom affiché après « Joue à » (voir plus bas) |
+| Work summary | on | Shows a summary of your last 2 messages in each session |
+| Language | `auto` | `fr`, `en`, or `auto` (your computer's language) |
+| Discord application ID | the "Сlaude Code" app | Changes the name shown after "Playing" (see below) |
 
-> ⚠️ **Le résumé est visible par tous ceux qui voient ton profil Discord** (amis, membres de tes serveurs). Si tu travailles sur quelque chose de secret, désactive-le. Le résumé est fait par Claude Haiku et consomme un tout petit peu de ton abonnement à chaque nouvelle demande. Le texte complet de tes messages n'est jamais envoyé à Discord, seulement le titre court.
+> ⚠️ **The summary is visible to everyone who can see your Discord profile** (friends, members of your servers). If you work on something secret, turn it off. Summaries are made by Claude Haiku and use a tiny bit of your plan for each new message. Your messages are never sent to Discord, only the short title.
 
-## Comment ça marche
+## How it works
 
-1. Un **hook** Claude Code note l'état de chaque session (ce que fait Claude, tes 2 dernières demandes) dans `~/.claude/plugins/data/clawd-presence…/`.
-2. Un **petit programme** (`scripts/presence.py`) lit ces fichiers toutes les 4 secondes et envoie l'activité à l'application Discord, directement sur ton ordinateur (pas de serveur, pas de compte à créer).
-3. S'il y a plusieurs sessions, c'est la plus « urgente » qui s'affiche : une qui t'attend passe avant une qui travaille.
+1. A Claude Code **hook** records the state of each session (what Claude is doing, your last 2 messages) in `~/.claude/plugins/data/clawd-presence-clawd-presence/`.
+2. A **small program** (`scripts/presence.py`) reads those files every 4 seconds and sends the activity to the Discord app, locally on your computer (no server, no account).
+3. With several sessions, the most "urgent" one leads: a session waiting for you comes before one that is working.
 
-## Problèmes fréquents
+## Troubleshooting
 
-**Rien ne s'affiche**
-- L'application Discord est bien ouverte, et « Partager mon activité » est activé ?
-- Tu as redémarré Claude Code après l'installation, et envoyé au moins une demande ?
-- Regarde le journal : `~/.claude/plugins/data/clawd-presence-clawd-presence/presence.log`.
-- Pour voir ce qui serait envoyé à Discord :
+**Nothing shows up**
+- Is the Discord desktop app open, with "Share my activity" on?
+- Did you restart Claude Code (or run `/reload-plugins`) after installing? A session only appears once Claude does something in it.
+- Check the log: `~/.claude/plugins/data/clawd-presence-clawd-presence/presence.log`.
+- To see what would be sent to Discord:
   ```
   python3 ~/.claude/plugins/cache/clawd-presence/clawd-presence/*/scripts/presence.py ~/.claude/plugins/data/clawd-presence-clawd-presence --print
   ```
 
-**Un jeu ou une autre appli passe devant**
-Discord choisit lui-même quelle activité montrer en premier. Les applis qui affichent aussi leur propre activité (Modrinth, certains lanceurs…) ont souvent une option pour la couper dans leurs réglages.
+**A game or another app shows first**
+Discord picks which activity to show first. Apps that publish their own activity (Modrinth, some launchers…) usually have a setting to turn it off.
 
-**Je veux un autre nom que « Сlaude Code »**
-Crée une application sur le [portail développeurs Discord](https://discord.com/developers/applications) avec le nom que tu veux, copie son « Application ID » et colle-le dans le réglage *Discord application ID*. Discord refuse souvent les noms qui contiennent « Claude » : celui par défaut utilise un « С » cyrillique.
+**I want another name than "Сlaude Code"**
+Create an application on the [Discord Developer Portal](https://discord.com/developers/applications) with the name you want, copy its "Application ID" and paste it into the *Discord application ID* setting. Discord often refuses names containing "Claude": the default one uses a Cyrillic "С".
 
-## Désinstaller
+## Uninstall
 
 ```
 /plugin uninstall clawd-presence@clawd-presence
 ```
 
-## Crédits
+## Credits
 
-- Clawd est la mascotte de Claude Code, d'Anthropic. Ce projet n'est affilié ni à Anthropic ni à Discord.
-- Les animations de Clawd viennent du projet [claude-rpc](https://github.com/rar-file/claude-rpc), détourées et recadrées ici. L'application Discord « Сlaude Code » utilisée par défaut est aussi celle de claude-rpc.
-- Code sous licence MIT.
+- Clawd is the Claude Code mascot, by Anthropic. This project is not affiliated with Anthropic or Discord.
+- The Clawd animations come from the [claude-rpc](https://github.com/rar-file/claude-rpc) project, cut out and cropped here. The default "Сlaude Code" Discord application also comes from claude-rpc.
+- Code under the MIT license.
 
 ---
 
-## English
+## Français
 
-Shows your Claude Code sessions as a Discord activity: an animated Clawd that follows what Claude is doing, a short summary of your last two messages, and a timer since your first session started. Works on macOS, Windows and Linux. Needs the Discord desktop app and Python 3.8+ (on Windows, also Git for Windows).
+Affiche tes sessions Claude Code dans ton activité Discord : Clawd animé selon ce que fait Claude, un résumé de ce sur quoi tu travailles, ce que fait chaque fenêtre ouverte, et un chrono depuis le lancement de ta première session. Marche sur macOS, Windows et Linux.
+
+**Il faut** : l'application Discord ouverte sur l'ordinateur (avec « Partager mon activité » activé dans Paramètres → Confidentialité de l'activité), et Python 3.8 ou plus récent (sur Windows : installateur de python.org avec « Add python.exe to PATH », plus Git for Windows).
+
+**Installation**, dans Claude Code :
 
 ```
 /plugin marketplace add Louiscvo/clawd-presence
 /plugin install clawd-presence@clawd-presence
 ```
 
-Restart Claude Code, send a message, and check your Discord profile. Settings (summary on/off, language, Discord application ID) are in `/config`. The summary is public to anyone who can see your profile, so turn it off if your work is private.
+Redémarre Claude Code (ou tape `/reload-plugins` dans chaque session ouverte), et ton activité apparaît dès que Claude fait quelque chose.
+
+**Réglages** dans `/config`, partie Clawd Presence : résumé activé ou non, langue (`fr`, `en` ou `auto`), identifiant d'application Discord. ⚠️ Le résumé est visible par tous ceux qui voient ton profil : désactive-le si tu travailles sur quelque chose de secret.
+
+**Rien ne s'affiche ?** Vérifie que Discord est ouvert, que tu as relancé Claude Code après l'installation, et regarde le journal `~/.claude/plugins/data/clawd-presence-clawd-presence/presence.log`.
