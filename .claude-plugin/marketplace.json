@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "clawd-presence",
+  "owner": { "name": "Louiscvo", "url": "https://github.com/Louiscvo" },
+  "metadata": { "description": "Discord activity for Claude Code with an animated Clawd." },
+  "plugins": [
+    {
+      "name": "clawd-presence",
+      "source": "./",
+      "description": "Shows your Claude Code sessions as a Discord activity, with an animated Clawd and a short summary of what you are working on.",
+      "category": "integrations"
+    }
+  ]
+}
