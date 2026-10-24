@@ -8,12 +8,12 @@ On your Discord profile it looks like this:
 
 ```
 Playing Сlaude Code
-Dark mode for the website                          ← summary of your last 2 messages
-3 sessions: Writing code, Thinking, Idle           ← what each open session is doing
-🎮 3:12:05                                         ← since your first session started
+Dark mode for the website                                        ← summary of your last 2 messages
+3 sessions: Writing code, Thinking, Idle · 2 helpers · 38.7M tokens   ← what each session is doing
+🎮 3:12:05                                                       ← since your first session started
 ```
 
-Hover the image to see the summary of every session.
+Hover the image to see the summary of every session. The token count adds up everything Claude processed in your open sessions and their helpers (input, output and cache), read from Claude Code's own session history.
 
 | Clawd | When |
 | --- | --- |
@@ -98,7 +98,7 @@ Create an application on the [Discord Developer Portal](https://discord.com/deve
 
 ## Français
 
-Affiche tes sessions Claude Code dans ton activité Discord : Clawd animé selon ce que fait Claude, un résumé de ce sur quoi tu travailles, ce que fait chaque fenêtre ouverte, et un chrono depuis le lancement de ta première session. Marche sur macOS, Windows et Linux.
+Affiche tes sessions Claude Code dans ton activité Discord : Clawd animé selon ce que fait Claude, un résumé de ce sur quoi tu travailles, ce que fait chaque fenêtre ouverte, le nombre d'assistants au travail, les tokens utilisés et un chrono depuis le lancement de ta première session. Marche sur macOS, Windows et Linux.
 
 **Il faut** : l'application Discord ouverte sur l'ordinateur (avec « Partager mon activité » activé dans Paramètres → Confidentialité de l'activité), et Python 3.8 ou plus récent (sur Windows : installateur de python.org avec « Add python.exe to PATH », plus Git for Windows).
 

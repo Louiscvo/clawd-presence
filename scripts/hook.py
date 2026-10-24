@@ -249,6 +249,8 @@ def main():
             record["pid"] = claude_pid()
         record.setdefault("started", START)
         record["cwd"] = payload.get("cwd") or record.get("cwd")
+        if not payload.get("agent_id") and payload.get("transcript_path"):
+            record["transcript"] = payload["transcript_path"]
         update(record, payload, event)
         record.setdefault("t", START)
         write_json(path, record)
