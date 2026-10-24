@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "clawd-presence",
   "displayName": "Clawd Presence",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Shows your Claude Code sessions as a Discord activity, with an animated Clawd and a short summary of what you are working on.",
   "author": { "name": "Louiscvo", "url": "https://github.com/Louiscvo" },
   "homepage": "https://github.com/Louiscvo/clawd-presence#readme",

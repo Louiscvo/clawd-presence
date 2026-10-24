@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime, timedelta
 
 IMAGE_URL = "https://raw.githubusercontent.com/Louiscvo/clawd-presence/main/images/{}.gif"
 DEFAULT_CLIENT_ID = "1506443909406920948"
@@ -19,6 +21,8 @@ EXIT_AFTER_SECONDS = 10 * 60
 SUMMARY_TIMEOUT = 90
 AGENT_SECONDS = 5 * 60
 FILE_AGENT_SECONDS = 90
+STALE_AGENT_SECONDS = 30 * 60
+PROMPT_REFRESH_SECONDS = 30
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 LABELS = {
@@ -30,6 +34,7 @@ LABELS = {
         "question": "Attend une réponse", "done": "A fini, attend la suite", "error": "Bloqué sur une erreur",
         "ready": "Session ouverte", "idle": "En pause",
         "sessions": "{} sessions : {}", "helper": "{} assistant", "helpers": "{} assistants", "tokens": "{} tokens",
+        "out": "Plus de tokens", "back": "Reprise à {when}", "back_week": "Reprise le {when}",
     },
     "en": {
         "thinking": "Thinking", "code": "Writing code", "commands": "Running commands",
@@ -39,6 +44,7 @@ LABELS = {
         "question": "Waiting for an answer", "done": "Done, waiting for more", "error": "Stopped on an error",
         "ready": "Session open", "idle": "Idle",
         "sessions": "{} sessions: {}", "helper": "{} helper", "helpers": "{} helpers", "tokens": "{} tokens",
+        "out": "Out of tokens", "back": "Back at {when}", "back_week": "Back on {when}",
     },
 }
 SUMMARY_PROMPTS = {
@@ -50,16 +56,23 @@ SUMMARY_PROMPTS = {
           "no quotes, no final period, no file names. Reply with the title only.",
 }
 IMAGES = {
-    "working-building": {"code", "commands", "agents", "working"},
+    "agents": {"agents"},
+    "working-building": {"code", "commands", "working"},
     "notification": {"permission", "question", "done", "error"},
     "sleeping": {"ready", "idle"},
 }
+RESET_PATTERN = re.compile(
+    r"resets\s+(?:(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2})\s+at\s+)?(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*"
+    r"(?P<ampm>am|pm)(?:\s*\((?P<zone>[^)]+)\))?", re.IGNORECASE)
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 PRIORITY = {"waiting": 3, "working": 2, "error": 1, "done": 1, "ready": 0}
 
 summaries = {}
 pending = {}
 checked_pids = {}
 launch_times = {}
+finished_agents = set()
+prompt_cache = {}
 token_files = {}
 transcripts = {}
 
@@ -105,11 +118,12 @@ def launch_time(pid):
 
 def live_sessions(folder, now):
     sessions = []
+    registry = registry_sessions()
     directory = os.path.join(folder, "sessions")
     try:
         names = os.listdir(directory)
     except OSError:
-        return sessions
+        names = []
     for name in names:
         if not name.endswith(".json"):
             continue
@@ -130,6 +144,24 @@ def live_sessions(folder, now):
                 os.remove(path)
             except OSError:
                 pass
+    known = {record.get("id") for record in sessions}
+    for session, entry in registry.items():
+        if session in known:
+            continue
+        busy = entry.get("status") == "busy"
+        sessions.append({
+            "id": session,
+            "pid": entry.get("pid"),
+            "state": "working" if busy else "done",
+            "action": "working" if busy else "done",
+            "t": (entry.get("statusUpdatedAt") or entry.get("updatedAt") or now * 1000) / 1000,
+        })
+    for record in sessions:
+        entry = registry.get(record.get("id"))
+        if entry and entry.get("startedAt"):
+            record["started"] = entry["startedAt"] / 1000
+        if not record.get("prompts"):
+            record["prompts"] = transcript_prompts(record, now)
     return sessions
 
 
@@ -207,18 +239,101 @@ def active_agents(record, now):
     running = {a for a, t in seen.items() if now - t < AGENT_SECONDS} if isinstance(seen, dict) else set(seen)
     folder = agents_folder(record)
     try:
-        names = os.listdir(folder) if folder else []
+        names = set(os.listdir(folder)) if folder else set()
     except OSError:
-        names = []
+        names = set()
     for name in names:
-        if name.startswith("agent-") and name.endswith(".jsonl"):
-            try:
-                if now - os.path.getmtime(os.path.join(folder, name)) < FILE_AGENT_SECONDS:
-                    running.add(name[6:-6])
-            except OSError:
-                pass
-    record["_agents"] = len(running - set(record.get("ended") or []))
+        if not name.startswith("agent-") or not name.endswith(".jsonl"):
+            continue
+        agent = name[6:-6]
+        meta = f"agent-{agent}.meta.json"
+        try:
+            age = now - os.path.getmtime(os.path.join(folder, name))
+        except OSError:
+            continue
+        if meta in names:
+            if agent not in finished_agents and read_json(os.path.join(folder, meta), {}).get("finished"):
+                finished_agents.add(agent)
+            if agent not in finished_agents and age < STALE_AGENT_SECONDS:
+                running.add(agent)
+        elif age < FILE_AGENT_SECONDS:
+            running.add(agent)
+    record["_agents"] = len(running - finished_agents - set(record.get("ended") or []))
     return record["_agents"]
+
+
+def prompt_text(line):
+    if b'"type":"user"' not in line or b'"tool_use_id"' in line:
+        return None
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return None
+    if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isSidechain") or entry.get("isCompactSummary"):
+        return None
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    if not isinstance(content, str):
+        return None
+    text = " ".join(content.split())
+    if not text or text.startswith(("<", "[Request interrupted", "This session is being continued")):
+        return None
+    return text[:1500]
+
+
+def transcript_prompts(record, now):
+    path = transcript_of(record)
+    if not path:
+        return []
+    cached = prompt_cache.get(path)
+    if cached and now - cached[0] < PROMPT_REFRESH_SECONDS:
+        return cached[1]
+    prompts = []
+    try:
+        size = os.path.getsize(path)
+        window = 4 << 20
+        while True:
+            with open(path, "rb") as file:
+                file.seek(max(0, size - window))
+                lines = file.read().split(b"\n")
+            if size > window:
+                lines = lines[1:]
+            prompts = [text for text in map(prompt_text, lines) if text][-2:]
+            if len(prompts) >= 2 or window >= size:
+                break
+            window *= 4
+    except OSError:
+        pass
+    prompt_cache[path] = (now, prompts)
+    return prompts
+
+
+def pid_alive(pid):
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return bool(ok) and code.value == 259
+    return is_claude(pid)
+
+
+def registry_sessions():
+    root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    found = {}
+    for path in glob.glob(os.path.join(root, "sessions", "*.json")):
+        entry = read_json(path, None)
+        if not isinstance(entry, dict) or entry.get("kind", "interactive") != "interactive":
+            continue
+        pid, session = entry.get("pid"), entry.get("sessionId")
+        if isinstance(pid, int) and session and pid_alive(pid):
+            found[session] = entry
+    return found
 
 
 def action_of(record, now):
@@ -241,37 +356,84 @@ def compact(number, language):
     return str(number)
 
 
-def file_tokens(path):
-    state = token_files.setdefault(path, [0, 0, set()])
+def entry_time(entry):
+    try:
+        return datetime.fromisoformat(str(entry.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0
+
+
+def message_text(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return content if isinstance(content, str) else ""
+
+
+def parse_reset(text, hit_at):
+    match = RESET_PATTERN.search(text)
+    if not match:
+        return None
+    zone = None
+    if match.group("zone"):
+        try:
+            from zoneinfo import ZoneInfo
+            zone = ZoneInfo(match.group("zone"))
+        except Exception:
+            zone = None
+    base = datetime.fromtimestamp(hit_at, zone) if zone else datetime.fromtimestamp(hit_at)
+    hour = int(match.group("hour")) % 12 + (12 if match.group("ampm").lower() == "pm" else 0)
+    minute = int(match.group("minute") or 0)
+    if match.group("month"):
+        month = MONTHS.index(match.group("month")[:3].lower()) + 1
+        reset = base.replace(month=month, day=int(match.group("day")), hour=hour, minute=minute, second=0, microsecond=0)
+        if reset < base - timedelta(days=1):
+            reset = reset.replace(year=reset.year + 1)
+    else:
+        reset = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if reset <= base:
+            reset += timedelta(days=1)
+    return reset.timestamp()
+
+
+def scan_file(path):
+    state = token_files.setdefault(path, {"offset": 0, "seen": set(), "entries": [], "ok": 0, "limit": None})
     try:
         size = os.path.getsize(path)
     except OSError:
-        return state[1]
-    if size < state[0]:
-        state[:] = [0, 0, set()]
-    if size > state[0]:
+        return state
+    if size < state["offset"]:
+        state.update(offset=0, seen=set(), entries=[], ok=0, limit=None)
+    if size > state["offset"]:
         with open(path, "rb") as file:
-            file.seek(state[0])
-            chunk = file.read(size - state[0])
+            file.seek(state["offset"])
+            chunk = file.read(size - state["offset"])
         end = chunk.rfind(b"\n") + 1
         for line in chunk[:end].split(b"\n"):
-            if b'"usage"' not in line:
+            if b'"assistant"' not in line:
                 continue
             try:
                 entry = json.loads(line)
             except ValueError:
                 continue
+            if entry.get("type") != "assistant":
+                continue
             message = entry.get("message") or {}
+            when = entry_time(entry)
+            if entry.get("isApiErrorMessage"):
+                if entry.get("error") == "rate_limit":
+                    text = message_text(message)
+                    state["limit"] = (when, parse_reset(text, when), "weekly" in text)
+                continue
+            state["ok"] = max(state["ok"], when)
             usage = message.get("usage")
-            if entry.get("type") != "assistant" or not isinstance(usage, dict):
-                continue
             key = (message.get("id"), entry.get("requestId"))
-            if key in state[2]:
+            if not isinstance(usage, dict) or key in state["seen"]:
                 continue
-            state[2].add(key)
-            state[1] += sum(usage.get(field) for field in TOKEN_FIELDS if isinstance(usage.get(field), int))
-        state[0] += end
-    return state[1]
+            state["seen"].add(key)
+            state["entries"].append((when, sum(usage.get(f) for f in TOKEN_FIELDS if isinstance(usage.get(f), int))))
+        state["offset"] += end
+    return state
 
 
 def transcript_of(record):
@@ -285,20 +447,29 @@ def transcript_of(record):
     return transcripts[session]
 
 
-def session_tokens(record):
+def session_files(record):
     transcript = transcript_of(record)
     if not transcript:
-        return 0
-    total = file_tokens(transcript)
+        return []
+    files = [scan_file(transcript)]
     agents = agents_folder(record)
     try:
         names = os.listdir(agents)
     except OSError:
         names = []
-    for name in names:
-        if name.endswith(".jsonl"):
-            total += file_tokens(os.path.join(agents, name))
-    return total
+    files += [scan_file(os.path.join(agents, name)) for name in names if name.endswith(".jsonl")]
+    return files
+
+
+def usage_window(files, now):
+    limits = [f["limit"] for f in files if f["limit"] and f["limit"][1]]
+    last_ok = max((f["ok"] for f in files), default=0)
+    if not limits:
+        return None, 0
+    hit_at, reset, weekly = max(limits)
+    if reset > now and last_ok <= hit_at:
+        return (reset, weekly), 0
+    return None, reset if reset <= now else 0
 
 
 def build_activity(folder, options):
@@ -327,22 +498,38 @@ def build_activity(folder, options):
         parts.append(labels["sessions"].format(len(ordered), ", ".join(names)))
     elif summary:
         parts.append(names[0])
-    helpers = sum(active_agents(r, now) for r in ordered)
-    if helpers:
-        parts.append(labels["helpers" if helpers > 1 else "helper"].format(helpers))
-    tokens = sum(session_tokens(r) for r in ordered)
+    files = [f for r in ordered for f in session_files(r)]
+    blocked, restart = usage_window(files, now)
+    hover = " · ".join(t for t in (texts.get(r.get("id")) for r in ordered) if t)
+    if blocked:
+        reset, weekly = blocked
+        return {
+            "details": labels["out"],
+            "state": labels["back_week" if weekly else "back"].format(when=reset_label(reset, language, weekly)),
+            "assets": {"large_image": IMAGE_URL.format("out"), "large_text": shorten(hover or "Claude Code")},
+            "timestamps": {"end": int(reset)},
+        }, len(sessions)
+    tokens = sum(t for f in files for when, t in f["entries"] if when >= restart)
     if tokens:
         parts.append(labels["tokens"].format(compact(tokens, language)))
-    hover = " · ".join(t for t in (texts.get(r.get("id")) for r in ordered) if t)
     activity = {
         "details": (summary or names[0])[:128],
         "assets": {"large_image": image_for(actions[0]), "large_text": shorten(hover or "Claude Code")},
     }
     if parts:
         activity["state"] = shorten(" · ".join(parts))
-    started = min(r.get("started") or r.get("t") or now for r in sessions)
+    started = max(min(r.get("started") or r.get("t") or now for r in sessions), restart)
     activity["timestamps"] = {"start": int(started)}
     return activity, len(sessions)
+
+
+def reset_label(reset, language, weekly):
+    moment = datetime.fromtimestamp(reset)
+    if language == "fr":
+        hour = f"{moment.hour}h{moment.minute:02d}" if moment.minute else f"{moment.hour}h"
+        return f"{moment.day}/{moment.month} à {hour}" if weekly else hour
+    hour = moment.strftime("%I:%M %p").lstrip("0").replace(":00 ", " ").lower()
+    return f"{moment.strftime('%b')} {moment.day} at {hour}" if weekly else hour
 
 
 def socket_paths():
