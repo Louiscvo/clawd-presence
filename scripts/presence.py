@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ ORPHAN_SECONDS = 30 * 60
 EXIT_AFTER_SECONDS = 10 * 60
 SUMMARY_TIMEOUT = 90
 AGENT_SECONDS = 5 * 60
+TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 LABELS = {
     "fr": {
@@ -26,7 +28,7 @@ LABELS = {
         "tools": "Utilise un outil", "working": "Travaille", "permission": "Attend une permission",
         "question": "Attend une réponse", "done": "A fini, attend la suite", "error": "Bloqué sur une erreur",
         "ready": "Session ouverte", "idle": "En pause",
-        "sessions": "{} sessions : {}", "helper": "{} assistant", "helpers": "{} assistants",
+        "sessions": "{} sessions : {}", "helper": "{} assistant", "helpers": "{} assistants", "tokens": "{} tokens",
     },
     "en": {
         "thinking": "Thinking", "code": "Writing code", "commands": "Running commands",
@@ -35,7 +37,7 @@ LABELS = {
         "tools": "Using a tool", "working": "Working", "permission": "Waiting for permission",
         "question": "Waiting for an answer", "done": "Done, waiting for more", "error": "Stopped on an error",
         "ready": "Session open", "idle": "Idle",
-        "sessions": "{} sessions: {}", "helper": "{} helper", "helpers": "{} helpers",
+        "sessions": "{} sessions: {}", "helper": "{} helper", "helpers": "{} helpers", "tokens": "{} tokens",
     },
 }
 SUMMARY_PROMPTS = {
@@ -57,6 +59,8 @@ summaries = {}
 pending = {}
 checked_pids = {}
 launch_times = {}
+token_files = {}
+transcripts = {}
 
 
 def default_data_dir():
@@ -209,6 +213,74 @@ def shorten(text, limit=128):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+def compact(number, language):
+    for limit, suffix in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
+        if number >= limit:
+            text = f"{number / limit:.1f}".rstrip("0").rstrip(".")
+            return f"{text.replace('.', ',')} {suffix}" if language == "fr" else f"{text}{suffix}"
+    return str(number)
+
+
+def file_tokens(path):
+    state = token_files.setdefault(path, [0, 0, set()])
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return state[1]
+    if size < state[0]:
+        state[:] = [0, 0, set()]
+    if size > state[0]:
+        with open(path, "rb") as file:
+            file.seek(state[0])
+            chunk = file.read(size - state[0])
+        end = chunk.rfind(b"\n") + 1
+        for line in chunk[:end].split(b"\n"):
+            if b'"usage"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            message = entry.get("message") or {}
+            usage = message.get("usage")
+            if entry.get("type") != "assistant" or not isinstance(usage, dict):
+                continue
+            key = (message.get("id"), entry.get("requestId"))
+            if key in state[2]:
+                continue
+            state[2].add(key)
+            state[1] += sum(usage.get(field) for field in TOKEN_FIELDS if isinstance(usage.get(field), int))
+        state[0] += end
+    return state[1]
+
+
+def transcript_of(record):
+    if record.get("transcript"):
+        return record["transcript"]
+    session = record.get("id")
+    if session not in transcripts:
+        root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        found = glob.glob(os.path.join(root, "projects", "*", f"{session}.jsonl"))
+        transcripts[session] = found[0] if found else None
+    return transcripts[session]
+
+
+def session_tokens(record):
+    transcript = transcript_of(record)
+    if not transcript:
+        return 0
+    total = file_tokens(transcript)
+    agents = os.path.join(os.path.splitext(transcript)[0], "subagents")
+    try:
+        names = os.listdir(agents)
+    except OSError:
+        names = []
+    for name in names:
+        if name.endswith(".jsonl"):
+            total += file_tokens(os.path.join(agents, name))
+    return total
+
+
 def build_activity(folder, options):
     now = time.time()
     sessions = live_sessions(folder, now)
@@ -238,6 +310,9 @@ def build_activity(folder, options):
     helpers = sum(active_agents(r, now) for r in ordered)
     if helpers:
         parts.append(labels["helpers" if helpers > 1 else "helper"].format(helpers))
+    tokens = sum(session_tokens(r) for r in ordered)
+    if tokens:
+        parts.append(labels["tokens"].format(compact(tokens, language)))
     hover = " · ".join(t for t in (texts.get(r.get("id")) for r in ordered) if t)
     activity = {
         "details": (summary or names[0])[:128],
